@@ -1,7 +1,7 @@
 package main
 
 import (
-	"encoding/json"
+	"html/template"
 	"log"
 	"net/http"
 	"strconv"
@@ -17,85 +17,112 @@ type Note struct {
 	CreatedOn   time.Time `json:"createdOn"`
 }
 
+//View Model for edit
+type EditNote struct {
+	Note
+	Id string
+}
+
 //Store for the Notes collection
 var noteStore = make(map[string]Note)
 
 //Variable to generate key for the collection
 var id int
 
-//PostNoteHandler ...
-func PostNoteHandler(w http.ResponseWriter, r *http.Request) {
-	var note Note
+var templates map[string]*template.Template
 
-	err := json.NewDecoder(r.Body).Decode(&note)
-	if err != nil {
-		panic(err)
-	}
-	note.CreatedOn = time.Now()
+func getNotes(w http.ResponseWriter, r *http.Request) {
+	renderTemplate(w, "index", "base", noteStore)
+}
+func addNote(w http.ResponseWriter, r *http.Request) {
+	renderTemplate(w, "add", "base", nil)
+}
+func saveNote(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	title := r.PostFormValue("title")
+	desc := r.PostFormValue("description")
+	note := Note{title, desc, time.Now()}
+	//increment the value of id for generating key for the map
 	id++
+	//convert id value to string
 	k := strconv.Itoa(id)
 	noteStore[k] = note
-
-	j, err := json.Marshal(note)
-	if err != nil {
-		panic(err)
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	w.Write(j)
+	http.Redirect(w, r, "/", 302)
 }
-
-//GetNoteHandler ...
-func GetNoteHandler(w http.ResponseWriter, r *http.Request) {
-	var notes []Note
-	for _, v := range noteStore {
-		notes = append(notes, v)
+func editNote(w http.ResponseWriter, r *http.Request) {
+	var viewModel EditNote
+	//Read value from route variable
+	vars := mux.Vars(r)
+	k := vars["id"]
+	if note, ok := noteStore[k]; ok {
+		viewModel = EditNote{note, k}
+	} else {
+		http.Error(w, "Could not find the resource to edit.", http.StatusBadRequest)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	j, err := json.Marshal(notes)
-	if err != nil {
-		panic(err)
-	}
-	w.WriteHeader(http.StatusOK)
-	w.Write(j)
+	renderTemplate(w, "edit", "base", viewModel)
 }
-
-//PutNoteHandler ...
-func PutNoteHandler(w http.ResponseWriter, r *http.Request) {
-	var err error
+func updateNote(w http.ResponseWriter, r *http.Request) {
+	//Read value from route variable
 	vars := mux.Vars(r)
 	k := vars["id"]
 	var noteToUpd Note
-	err = json.NewDecoder(r.Body).Decode(&noteToUpd)
-	if err != nil {
-		panic(err)
-	}
 	if note, ok := noteStore[k]; ok {
+		r.ParseForm()
+		noteToUpd.Title = r.PostFormValue("title")
+		noteToUpd.Description = r.PostFormValue("description")
 		noteToUpd.CreatedOn = note.CreatedOn
+		//delete existing item and add the updated item
 		delete(noteStore, k)
 		noteStore[k] = noteToUpd
 	} else {
-		log.Printf("Could not find key of Note %s to delete", k)
+		http.Error(w, "Could not find the resource to update.", http.StatusBadRequest)
 	}
-	w.WriteHeader(http.StatusNoContent)
+	http.Redirect(w, r, "/", 302)
 }
-//DeleteNoteHandler ...
-func DeleteNoteHandler(w http.ResponseWriter, r *http.Request) {
+func deleteNote(w http.ResponseWriter, r *http.Request) {
+	//Read value from route variable
 	vars := mux.Vars(r)
 	k := vars["id"]
+	// Remove from Store
 	if _, ok := noteStore[k]; ok {
+		//delete existing item
 		delete(noteStore, k)
 	} else {
-		log.Printf("Could not find key of Note %s to delete", k)
+		http.Error(w, "Could not find the resource to delete.", http.StatusBadRequest)
 	}
-	w.WriteHeader(http.StatusNoContent)
+	http.Redirect(w, r, "/", 302)
 }
+func init() {
+	if templates == nil {
+		templates = make(map[string]*template.Template)
+	}
+	templates["index"] = template.Must(template.ParseFiles("templates/index.html", "templates/base.html"))
+	templates["add"] = template.Must(template.ParseFiles("templates/add.html", "templates/base.html"))
+	templates["edit"] = template.Must(template.ParseFiles("templates/edit.html", "templates/base.html"))
+}
+
+func renderTemplate(w http.ResponseWriter, name, template string, viewModel interface{}) {
+	tmpl, ok := templates[name]
+	if !ok {
+		http.Error(w, "The template does not exists.", http.StatusInternalServerError)
+	}
+	err := tmpl.ExecuteTemplate(w, template, viewModel)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 func main() {
 	r := mux.NewRouter().StrictSlash(false)
-	r.HandleFunc("/api/notes", GetNoteHandler).Methods("GET")
-	r.HandleFunc("/api/notes", PostNoteHandler).Methods("POST")
-	r.HandleFunc("/api/noted/{id}", PutNoteHandler).Methods("PUT")
-	r.HandleFunc("/api/notes/{id}", DeleteNoteHandler).Methods("DELETE")
+	fs := http.FileServer(http.Dir("public"))
+	r.Handle("/public/", fs)
+
+	r.HandleFunc("/", getNotes)
+	r.HandleFunc("/notes/add", addNote)
+	r.HandleFunc("/notes/save", saveNote)
+	r.HandleFunc("/notes/edit/{id}", editNote)
+	r.HandleFunc("/notes/update/{id}", updateNote)
+	r.HandleFunc("/notes/delete/{id}", deleteNote)
 
 	server := &http.Server{
 		Addr:    ":8080",
