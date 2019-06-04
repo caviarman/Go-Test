@@ -1,132 +1,27 @@
 package main
 
 import (
-	"html/template"
 	"log"
 	"net/http"
-	"strconv"
-	"time"
-
-	"github.com/gorilla/mux"
+	
+	
+	"github.com/codegangsta/negroni"
+	"github.com/shijuvar/go-web/taskmanager/common"
+	"github.com/shijuvar/go-web/taskmanager/routers"
 )
 
-//Note ...
-type Note struct {
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	CreatedOn   time.Time `json:"createdOn"`
-}
-
-//View Model for edit
-type EditNote struct {
-	Note
-	Id string
-}
-
-//Store for the Notes collection
-var noteStore = make(map[string]Note)
-
-//Variable to generate key for the collection
-var id int
-
-var templates map[string]*template.Template
-
-func getNotes(w http.ResponseWriter, r *http.Request) {
-	renderTemplate(w, "index", "base", noteStore)
-}
-func addNote(w http.ResponseWriter, r *http.Request) {
-	renderTemplate(w, "add", "base", nil)
-}
-func saveNote(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
-	title := r.PostFormValue("title")
-	desc := r.PostFormValue("description")
-	note := Note{title, desc, time.Now()}
-	//increment the value of id for generating key for the map
-	id++
-	//convert id value to string
-	k := strconv.Itoa(id)
-	noteStore[k] = note
-	http.Redirect(w, r, "/", 302)
-}
-func editNote(w http.ResponseWriter, r *http.Request) {
-	var viewModel EditNote
-	//Read value from route variable
-	vars := mux.Vars(r)
-	k := vars["id"]
-	if note, ok := noteStore[k]; ok {
-		viewModel = EditNote{note, k}
-	} else {
-		http.Error(w, "Could not find the resource to edit.", http.StatusBadRequest)
-	}
-	renderTemplate(w, "edit", "base", viewModel)
-}
-func updateNote(w http.ResponseWriter, r *http.Request) {
-	//Read value from route variable
-	vars := mux.Vars(r)
-	k := vars["id"]
-	var noteToUpd Note
-	if note, ok := noteStore[k]; ok {
-		r.ParseForm()
-		noteToUpd.Title = r.PostFormValue("title")
-		noteToUpd.Description = r.PostFormValue("description")
-		noteToUpd.CreatedOn = note.CreatedOn
-		//delete existing item and add the updated item
-		delete(noteStore, k)
-		noteStore[k] = noteToUpd
-	} else {
-		http.Error(w, "Could not find the resource to update.", http.StatusBadRequest)
-	}
-	http.Redirect(w, r, "/", 302)
-}
-func deleteNote(w http.ResponseWriter, r *http.Request) {
-	//Read value from route variable
-	vars := mux.Vars(r)
-	k := vars["id"]
-	// Remove from Store
-	if _, ok := noteStore[k]; ok {
-		//delete existing item
-		delete(noteStore, k)
-	} else {
-		http.Error(w, "Could not find the resource to delete.", http.StatusBadRequest)
-	}
-	http.Redirect(w, r, "/", 302)
-}
-func init() {
-	if templates == nil {
-		templates = make(map[string]*template.Template)
-	}
-	templates["index"] = template.Must(template.ParseFiles("templates/index.html", "templates/base.html"))
-	templates["add"] = template.Must(template.ParseFiles("templates/add.html", "templates/base.html"))
-	templates["edit"] = template.Must(template.ParseFiles("templates/edit.html", "templates/base.html"))
-}
-
-func renderTemplate(w http.ResponseWriter, name, template string, viewModel interface{}) {
-	tmpl, ok := templates[name]
-	if !ok {
-		http.Error(w, "The template does not exists.", http.StatusInternalServerError)
-	}
-	err := tmpl.ExecuteTemplate(w, template, viewModel)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-}
-
+//Entry point of the program
 func main() {
-	r := mux.NewRouter().StrictSlash(false)
-	fs := http.FileServer(http.Dir("public"))
-	r.Handle("/public/", fs)
-
-	r.HandleFunc("/", getNotes)
-	r.HandleFunc("/notes/add", addNote)
-	r.HandleFunc("/notes/save", saveNote)
-	r.HandleFunc("/notes/edit/{id}", editNote)
-	r.HandleFunc("/notes/update/{id}", updateNote)
-	r.HandleFunc("/notes/delete/{id}", deleteNote)
-
+	// Calls startup logic
+	common.StartUp()
+	// Get the mux router object
+	router := routers.InitRoutes()
+	// Create a negroni instance
+	n := negroni.Classic()
+	n.UseHandler(router)
 	server := &http.Server{
-		Addr:    ":8080",
-		Handler: r,
+		Addr:    common.AppConfig.Server,
+		Handler: n,
 	}
 	log.Println("Listening...")
 	server.ListenAndServe()
